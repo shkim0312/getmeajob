@@ -1,18 +1,26 @@
+import json
 import re
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 import streamlit as st
+from openai import OpenAI
 
 st.set_page_config(page_title="대학생 진로 추천", page_icon="🧭", layout="centered")
 
 # =============================
-# Header
+# Sidebar: OpenAI API Key
 # =============================
+st.sidebar.header("🔑 OpenAI 설정")
+openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password", placeholder="sk-...")
+
+# (선택) 모델은 기본값 제공 (권한/계정에 따라 다를 수 있어 변경 가능하게)
+model_name = st.sidebar.text_input("모델명(선택)", value="gpt-5.2")
+
 st.title("🧭 대학생 진로 추천 웹사이트")
 st.write(
     "필수 정보(연령·학력·관심분야)와 선택 정보(성격·전공)를 입력하면, "
-    "키워드 매칭을 통해 **어울리는 직업 3개**와 **추천 이유**를 보여줘요."
+    "키워드 매칭으로 **직업 3개**를 추천하고, OpenAI가 **사용자 성향 해석 + 직업 추천 이유(각 2문장)**를 제공해요."
 )
 st.divider()
 
@@ -23,10 +31,10 @@ st.divider()
 class Job:
     name: str
     one_liner: str
-    fields: List[str]          # 관심분야 매핑: 인문/사회/교육/공학/자연/의학/예체능
-    keywords: List[str]        # 직업 관련 키워드
-    mbti_hints: List[str]      # 어울리는 MBTI 힌트
-    major_hints: List[str]     # 전공 키워드 힌트
+    fields: List[str]
+    keywords: List[str]
+    mbti_hints: List[str]
+    major_hints: List[str]
 
 
 # =============================
@@ -156,42 +164,120 @@ JOBS: List[Job] = [
 ]
 
 # =============================
-# Matching
+# Matching helpers
 # =============================
 def tokenize(text: str) -> List[str]:
     if not text:
         return []
     return re.findall(r"[A-Za-z가-힣0-9]+", text.lower())
 
-def score_job(job: Job, interest_field: str, mbti: Optional[str], major_text: str) -> Tuple[int, List[str]]:
+def score_job(job: Job, interest_field: str, mbti: Optional[str], major_text: str) -> int:
     score = 0
-    reasons: List[str] = []
 
-    if interest_field in job.fields:
-        score += 60
-        reasons.append(f"관심분야가 **{interest_field}**이고, 이 직업이 해당 분야와 직접적으로 연결돼요.")
-    else:
-        score += 5
+    # 관심분야 (핵심)
+    score += 60 if interest_field in job.fields else 5
 
+    # MBTI 힌트
     if mbti and mbti in job.mbti_hints:
         score += 18
-        reasons.append(f"선택한 MBTI(**{mbti}**) 성향이 이 직업의 업무 스타일과 잘 맞는 편이에요.")
 
+    # 전공/키워드 텍스트 매칭
     tokens = tokenize(major_text)
     if tokens:
-        hits = []
+        hits = 0
         for hint in (job.major_hints + job.keywords):
             h = hint.lower()
             if any(h in t or t in h for t in tokens):
-                hits.append(hint)
-        if hits:
-            score += 24
-            reasons.append(f"입력한 전공/키워드가 관련 분야({', '.join(hits[:3])})와 맞닿아 있어요.")
+                hits += 1
+        if hits > 0:
+            score += 24 + min(hits, 3)  # 약간 보너스
 
-    if len(reasons) > 3:
-        reasons = reasons[:3]
+    return score
 
-    return score, reasons
+# =============================
+# OpenAI: AI 해석 생성
+# =============================
+def generate_ai_interpretation(
+    api_key: str,
+    model: str,
+    user_profile: Dict[str, str],
+    top_jobs: List[Job],
+) -> Tuple[str, Dict[str, str]]:
+    """
+    반환:
+    - profile_summary: 사용자 패턴 해석(짧은 문단)
+    - job_reasons: {직업명: "2문장"}
+    """
+    client = OpenAI(api_key=api_key)
+
+    jobs_payload = [
+        {"name": j.name, "one_liner": j.one_liner, "fields": j.fields, "keywords": j.keywords[:8]}
+        for j in top_jobs
+    ]
+
+    prompt = f"""
+너는 대학생 진로 상담사야. 아래 사용자 입력 패턴을 분석해서 간단한 해석을 제공하고,
+추천 직업 3개 각각에 대해 '왜 추천하는지'를 정확히 2문장으로 설명해줘.
+
+[사용자 입력]
+- 연령: {user_profile.get("age_group")}
+- 학력: {user_profile.get("education")}
+- 관심분야: {user_profile.get("interest_field")}
+- MBTI: {user_profile.get("mbti")}
+- 전공(자유입력): {user_profile.get("major_text")}
+
+[추천 직업 후보 3개]
+{json.dumps(jobs_payload, ensure_ascii=False)}
+
+출력은 반드시 JSON만.
+스키마:
+{{
+  "profile_summary": "사용자 패턴 해석 (한국어, 2~4문장)",
+  "job_reasons": [
+    {{"job_name": "직업명", "reason": "추천 이유 2문장(한국어)."}},
+    ...
+  ]
+}}
+
+제약:
+- job_reasons는 반드시 3개이며, job_name은 위 후보 3개의 name과 정확히 일치.
+- reason은 문장 2개로만 작성(마침표 기준 2문장).
+- 과장/단정(예: '반드시 성공') 금지. 현실적인 표현 사용.
+""".strip()
+
+    resp = client.responses.create(
+        model=model,
+        input=prompt,
+    )
+
+    text = (resp.output_text or "").strip()
+    try:
+        data = json.loads(text)
+        profile_summary = str(data.get("profile_summary", "")).strip()
+
+        job_reasons_list = data.get("job_reasons", [])
+        job_reason_map: Dict[str, str] = {}
+        for item in job_reasons_list:
+            name = str(item.get("job_name", "")).strip()
+            reason = str(item.get("reason", "")).strip()
+            if name:
+                job_reason_map[name] = reason
+
+        # 누락 대비(혹시 파싱은 됐는데 일부가 비면)
+        for j in top_jobs:
+            job_reason_map.setdefault(j.name, "입력한 관심과 역량 방향이 이 직무와 잘 맞아요. 지금 단계에서 경험을 쌓아보기 좋은 선택지예요.")
+
+        if not profile_summary:
+            profile_summary = "입력한 관심 분야와 선택 정보(성격·전공)를 종합하면, 관련 분야에서 강점을 발휘할 가능성이 보여요. 특히 흥미가 오래 지속되는 영역을 중심으로 탐색하는 것이 좋아요."
+
+        return profile_summary, job_reason_map
+
+    except Exception:
+        # JSON이 아닐 때 안전한 폴백
+        fallback_summary = "입력한 관심 분야와 선택 정보(성격·전공)를 종합해 보면, 관련 분야에서 몰입할 수 있는 방향이 보여요. 아래 직업들은 그 방향성과 잘 맞는 대표 선택지예요."
+        fallback_map = {j.name: "관심 분야와 직무 성격이 잘 맞아요. 관련 경험을 작게라도 시작해보면 적성 확인에 도움이 돼요." for j in top_jobs}
+        return fallback_summary, fallback_map
+
 
 # =============================
 # Form UI
@@ -242,16 +328,49 @@ if submit:
         st.error(f"필수 항목을 제출해야 해요: {', '.join(missing)}")
         st.stop()
 
-    scored: List[Tuple[Job, int, List[str]]] = []
+    # 추천 점수 계산
+    scored: List[Tuple[Job, int]] = []
     for job in JOBS:
-        s, reasons = score_job(job, interest_field, mbti, major_text)
-        scored.append((job, s, reasons))
+        scored.append((job, score_job(job, interest_field, mbti, major_text)))
 
-    top3 = sorted(scored, key=lambda x: (x[1], x[0].name), reverse=True)[:3]
+    # 상위 3개
+    top3 = [j for (j, _) in sorted(scored, key=lambda x: (x[1], x[0].name), reverse=True)[:3]]
+
+    # OpenAI 해석 (키 없으면 안내만)
+    profile_summary = ""
+    ai_reason_map: Dict[str, str] = {}
+
+    if openai_api_key.strip():
+        with st.spinner("AI가 답변 패턴을 해석하는 중..."):
+            try:
+                user_profile = {
+                    "age_group": age_group,
+                    "education": education,
+                    "interest_field": interest_field,
+                    "mbti": mbti or "선택 안 함",
+                    "major_text": major_text.strip() if major_text else "(미입력)",
+                }
+                profile_summary, ai_reason_map = generate_ai_interpretation(
+                    api_key=openai_api_key.strip(),
+                    model=model_name.strip(),
+                    user_profile=user_profile,
+                    top_jobs=top3,
+                )
+            except Exception as e:
+                st.warning(f"AI 해석을 불러오지 못했어요. (키/모델/네트워크 확인) 오류: {e}")
+                profile_summary = ""
+                ai_reason_map = {}
+    else:
+        st.info("사이드바에 OpenAI API Key를 입력하면, AI 해석(패턴 분석 + 2문장 추천 이유)이 추가로 표시돼요.")
 
     st.divider()
     st.subheader("✨ 추천 결과")
 
+    if profile_summary:
+        st.markdown("#### 🧠 AI 해석")
+        st.write(profile_summary)
+
+    # 카드 스타일
     st.markdown(
         """
         <style>
@@ -283,7 +402,7 @@ if submit:
         unsafe_allow_html=True,
     )
 
-    for idx, (job, score, reasons) in enumerate(top3, start=1):
+    for idx, job in enumerate(top3, start=1):
         pills = [
             f"<span class='pill'>#{idx}</span>",
             f"<span class='pill'>연령: {age_group}</span>",
@@ -295,7 +414,11 @@ if submit:
         if major_text.strip():
             pills.append("<span class='pill'>전공 입력됨</span>")
 
-        reason_html = "<br/>".join([f"• {r}" for r in reasons]) if reasons else "• 입력 정보와 직업 특성이 전반적으로 잘 맞아요."
+        ai_reason = ai_reason_map.get(job.name)
+        if ai_reason:
+            reason_html = f"• {ai_reason}"
+        else:
+            reason_html = "• 관심 분야와 직무 특성이 잘 맞고, 현재 단계에서 탐색/준비를 시작하기 좋은 선택지예요. • 관련 프로젝트·인턴·동아리로 작은 경험을 쌓아 적합도를 확인해보세요."
 
         st.markdown(
             f"""
@@ -303,10 +426,10 @@ if submit:
                 <div class="meta">{' '.join(pills)}</div>
                 <h3>{job.name}</h3>
                 <div>{job.one_liner}</div>
-                <p class="reason"><b>왜 추천했나요?</b><br/>{reason_html}</p>
+                <p class="reason"><b>왜 추천했나요? (AI, 2문장)</b><br/>{reason_html}</p>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-st.caption("※ 본 추천은 키워드 매칭 기반 데모이며, 실제 진로 선택은 추가 탐색/상담을 권장해요.")
+st.caption("※ 본 추천은 키워드 매칭 기반 데모이며, AI 해석은 참고용이에요. 실제 진로 선택은 추가 탐색/상담을 권장해요.")
