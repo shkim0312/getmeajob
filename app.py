@@ -18,14 +18,13 @@ st.set_page_config(page_title="대학생 진로 추천", page_icon="🧭", layou
 WORK24_LIST_URL = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo212L01.do"
 WORK24_DETAIL_URL = "https://www.work24.go.kr/cm/openApi/call/wk/callOpenApiSvcInfo212D01.do"
 
-LIST_FIXED_PARAMS = {"returnType": "XML", "target": "JOBCD"}                 # 목록(직업코드)
-DETAIL_FIXED_PARAMS = {"returnType": "XML", "target": "JOBDTL", "jobGb": "1"}  # 상세
+LIST_FIXED_PARAMS = {"returnType": "XML", "target": "JOBCD"}                    # 목록(직업코드)
+DETAIL_FIXED_PARAMS = {"returnType": "XML", "target": "JOBDTL", "jobGb": "1"}   # 상세
 
 # =============================
 # Sidebar
 # =============================
 st.sidebar.header("🔑 API 설정")
-
 work24_key = st.sidebar.text_input("고용24 authKey", type="password", placeholder="고용24 인증키 입력")
 
 st.sidebar.divider()
@@ -123,8 +122,8 @@ def parse_job_detail_summary(xml_text: str) -> Dict[str, str]:
     if job_sum is None:
         return {}
     return {
-        "jobSum": safe_text(job_sum, "jobSum"),          # 하는 일(요약)
-        "way": safe_text(job_sum, "way"),                # 되는 길
+        "jobSum": safe_text(job_sum, "jobSum"),
+        "way": safe_text(job_sum, "way"),
         "jobProspect": safe_text(job_sum, "jobProspect"),
         "jobSatis": safe_text(job_sum, "jobSatis"),
         "sal": safe_text(job_sum, "sal"),
@@ -208,9 +207,7 @@ def shorten(text: str, max_len: int = 140) -> str:
     t = re.sub(r"\s+", " ", (text or "").strip())
     if not t:
         return ""
-    if len(t) <= max_len:
-        return t
-    return t[:max_len].rstrip() + "…"
+    return t if len(t) <= max_len else t[:max_len].rstrip() + "…"
 
 # =============================
 # OpenAI: AI 요약/추천 이유 생성
@@ -228,14 +225,15 @@ def generate_ai_insights(
     """
     client = OpenAI(api_key=api_key)
 
-    jobs_payload = []
-    for j in jobs:
-        jobs_payload.append({
+    jobs_payload = [
+        {
             "jobCd": j.get("jobCd"),
             "jobNm": j.get("jobNm"),
             "one_liner": j.get("one_liner", ""),
             "jobClcdNM": j.get("jobClcdNM", ""),
-        })
+        }
+        for j in jobs
+    ]
 
     prompt = f"""
 너는 대학생 진로 상담사야. 아래 사용자 입력 패턴을 바탕으로:
@@ -265,7 +263,16 @@ def generate_ai_insights(
       "ai_summary": "1문장(한국어)",
       "ai_reason": "2~3문장(한국어)"
     }},
-    ...
+    {{
+      "jobCd": "고용24 jobCd(그대로)",
+      "ai_summary": "1문장(한국어)",
+      "ai_reason": "2~3문장(한국어)"
+    }},
+    {{
+      "jobCd": "고용24 jobCd(그대로)",
+      "ai_summary": "1문장(한국어)",
+      "ai_reason": "2~3문장(한국어)"
+    }}
   ]
 }}
 
@@ -295,6 +302,7 @@ def generate_ai_insights(
                 "ai_reason": (it.get("ai_reason") or "").strip(),
             }
 
+        # 누락 대비
         for j in jobs:
             cd = j.get("jobCd", "")
             if cd and cd not in job_ai:
@@ -306,7 +314,7 @@ def generate_ai_insights(
         if not user_trait:
             user_trait = (
                 "관심 분야와 선택 정보(전공/성격)를 종합하면, 흥미가 지속될 수 있는 영역을 중심으로 탐색해보는 게 좋아 보여요. "
-                "작은 경험을 통해 빠르게 ‘맞는지’를 확인하는 방식이 잘 맞아요."
+                "작은 경험으로 빠르게 적합도를 확인하는 방식이 잘 맞아요."
             )
 
         return user_trait, job_ai
@@ -314,13 +322,13 @@ def generate_ai_insights(
     except Exception:
         user_trait = (
             "관심 분야와 전공 키워드가 비교적 뚜렷해서, 관련 직무를 폭넓게 탐색해보면 좋겠어요. "
-            "작은 프로젝트로 빠르게 경험을 쌓는 방식이 잘 맞아요."
+            "작은 프로젝트로 경험을 쌓는 방식이 잘 맞아요."
         )
         for j in jobs:
             cd = j.get("jobCd", "")
             job_ai[cd] = {
                 "ai_summary": "이 직무는 관심 분야와 전공 힌트로 볼 때 탐색 가치가 높은 분야예요.",
-                "ai_reason": "입력한 관심 방향과 직무 요구 역량이 어느 정도 맞닿아 있어 추천했어요. 관련 경험을 한 번이라도 만들어보면 적합도를 더 정확히 판단할 수 있어요.",
+                "ai_reason": "입력한 관심 방향과 직무 요구 역량이 맞닿아 있어 추천했어요. 관련 경험을 만들어보면 적합도를 더 정확히 판단할 수 있어요.",
             }
         return user_trait, job_ai
 
@@ -361,7 +369,7 @@ if submit:
         missing.append("관심분야")
 
     if missing:
-        st.error(f"필수 항목을 제출해야 해요: {', '.join(missing)}")
+        st.error(f"제출하지 않은 항목이 있어요: {', '.join(missing)}")
         st.stop()
 
     if not work24_key.strip():
@@ -370,6 +378,7 @@ if submit:
 
     keywords = build_search_keywords(interest_field, major_text)
 
+    # 후보 풀 만들기
     with st.spinner("고용24에서 직업 정보를 검색하는 중..."):
         pool: List[Dict[str, str]] = []
         errors = []
@@ -383,24 +392,25 @@ if submit:
                 break
 
     if not pool:
-        st.warning("직업 검색 결과가 없어요. 전공을 더 일반적인 단어로 바꿔보거나, 전공을 비워두고 다시 시도해보세요.")
+        st.warning("직업 검색 결과가 없어요. 전공을 더 일반적인 단어로 바꿔보거나 전공을 비워두고 다시 시도해보세요.")
         if errors:
             st.caption(f"(참고) 마지막 오류: {errors[-1]}")
         st.stop()
 
-    uniq = {}
-    for j in pool:
-        uniq[j["jobCd"]] = j
+    # 중복 제거
+    uniq = {j["jobCd"]: j for j in pool}
     pool = list(uniq.values())
 
+    # 상위 3개 선정
     scored: List[Tuple[int, Dict[str, str], List[str]]] = []
     for j in pool:
         s, reasons = score_job(j, interest_field, major_text, mbti)
         scored.append((s, j, reasons))
     top3_scored = sorted(scored, key=lambda x: (x[0], x[1].get("jobNm", "")), reverse=True)[:3]
 
+    # 고용24 한 줄 설명 가져오기
     with st.spinner("추천 직업의 한 줄 설명을 불러오는 중..."):
-        enriched = []
+        enriched: List[Dict[str, str]] = []
         for s, j, reasons in top3_scored:
             detail, _ = work24_detail(work24_key.strip(), j["jobCd"], dtl_gb="1")
             one_liner_raw = (detail.get("jobSum") or "").strip()
@@ -411,6 +421,7 @@ if submit:
                 "fallback_reasons": reasons,
             })
 
+    # OpenAI 생성
     user_trait = ""
     job_ai_map: Dict[str, Dict[str, str]] = {}
 
@@ -431,7 +442,7 @@ if submit:
                     jobs=enriched,
                 )
             except Exception as e:
-                st.warning(f"AI 요약 생성에 실패했어요. (키/모델/네트워크 확인) 오류: {e}")
+                st.warning(f"AI 요약 생성에 실패했어요. 오류: {e}")
                 user_trait = ""
                 job_ai_map = {}
     else:
@@ -444,75 +455,43 @@ if submit:
         st.markdown("#### 🧠 사용자 성향")
         st.write(user_trait)
 
-    st.markdown(
-        """
-        <style>
-        .card {
-            border: 1px solid rgba(0,0,0,0.08);
-            border-radius: 16px;
-            padding: 18px 18px 14px 18px;
-            margin-bottom: 14px;
-            background: #ffffff;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.06);
-        }
-        .meta { display:flex; gap:8px; flex-wrap:wrap; margin-bottom: 8px; }
-        .pill {
-            display:inline-block;
-            padding: 4px 10px;
-            border-radius: 999px;
-            background: rgba(0,0,0,0.04);
-            font-size: 12px;
-        }
-        .reason { margin: 10px 0 0 0; line-height: 1.6; }
-        .dim { opacity: 0.88; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
+    # ✅ HTML 없이 '카드처럼' 출력 (오류 수정 핵심)
     for idx, job in enumerate(enriched, start=1):
-        pills = [
-            f"<span class='pill'>#{idx}</span>",
-            f"<span class='pill'>관심분야: {interest_field}</span>",
-        ]
-        if job.get("jobClcdNM"):
-            pills.append(f"<span class='pill'>분류: {job['jobClcdNM']}</span>")
-        if major_text.strip():
-            pills.append("<span class='pill'>전공 입력됨</span>")
-        if mbti:
-            pills.append(f"<span class='pill'>MBTI: {mbti}</span>")
-
         ai = job_ai_map.get(job["jobCd"], {})
-        ai_summary = ai.get("ai_summary", "").strip()
-        ai_reason = ai.get("ai_reason", "").strip()
-
-        if not ai_reason:
-            fallback = job.get("fallback_reasons", []) or []
-            ai_reason = " ".join([re.sub(r"\*\*(.*?)\*\*", r"\1", r) for r in fallback])
-            ai_reason = ai_reason if ai_reason else (
-                "관심 분야와 입력한 키워드를 바탕으로 관련 직업군을 추천했어요. "
-                "실제 경험을 통해 적합도를 확인해보면 좋아요."
-            )
+        ai_summary = (ai.get("ai_summary") or "").strip()
+        ai_reason = (ai.get("ai_reason") or "").strip()
 
         if not ai_summary:
             ai_summary = job.get("one_liner", "") or "이 직무는 관심 분야와 전공 힌트를 바탕으로 탐색하기 좋은 선택지예요."
 
-        st.markdown(
-            f"""
-            <div class="card">
-                <div class="meta">{' '.join(pills)}</div>
-                <h3 style="margin: 6px 0 6px 0;">{job['jobNm']}</h3>
+        if not ai_reason:
+            fallback = job.get("fallback_reasons", []) or []
+            # 마크다운 굵게표시 제거해서 문장형으로
+            plain = [re.sub(r"\*\*(.*?)\*\*", r"\1", r) for r in fallback]
+            ai_reason = " ".join(plain).strip()
+            if not ai_reason:
+                ai_reason = "관심 분야와 입력한 키워드를 바탕으로 관련 직업군을 추천했어요. 실제 경험을 통해 적합도를 확인해보면 좋아요."
 
-                <div class="dim"><b>한 줄 설명</b></div>
-                <div class="dim">{job['one_liner']}</div>
+        with st.container():
+            st.markdown(f"### {idx}. {job['jobNm']}")
+            meta = [f"관심분야: {interest_field}"]
+            if job.get("jobClcdNM"):
+                meta.append(f"분류: {job['jobClcdNM']}")
+            if major_text.strip():
+                meta.append("전공: 입력됨")
+            if mbti:
+                meta.append(f"MBTI: {mbti}")
+            st.caption(" | ".join(meta))
 
-                <div style="margin-top:10px;" class="dim"><b>AI 직무 요약</b></div>
-                <div class="dim">{ai_summary}</div>
+            st.markdown("**한 줄 설명**")
+            st.write(job["one_liner"])
 
-                <p class="reason"><b>왜 추천했나요?</b><br/>{ai_reason}</p>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+            st.markdown("**AI 직무 요약**")
+            st.write(ai_summary)
+
+            st.markdown("**왜 추천했나요?**")
+            st.write(ai_reason)
+
+        st.divider()
 
 st.caption("※ 본 추천은 키워드 매칭 기반 데모이며, 직업 정보는 고용24 OPEN-API를 활용합니다. AI 설명은 참고용이에요.")
