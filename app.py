@@ -17,10 +17,13 @@ openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password", placeh
 # (선택) 모델명
 model_name = st.sidebar.text_input("모델명(선택)", value="gpt-5.2")
 
+# =============================
+# Header
+# =============================
 st.title("🧭 대학생 진로 추천 웹사이트")
 st.write(
     "필수 정보(연령·학력·관심분야)와 선택 정보(성격·전공)를 입력하면, "
-    "키워드 매칭으로 **직업 3개**를 추천하고, OpenAI가 **사용자 성향 해석 + 직업 추천 이유(각 2문장)**를 제공해요."
+    "키워드 매칭으로 **직업 3개**를 추천하고, AI가 **성향 해석 + 추천 이유(각 2문장)**를 제공해요."
 )
 st.divider()
 
@@ -164,6 +167,27 @@ JOBS: List[Job] = [
 ]
 
 # =============================
+# Emoji for jobs (없으면 기본)
+# =============================
+JOB_EMOJI: Dict[str, str] = {
+    "선장": "⚓", "제과사": "🧁", "반도체공학기술자": "🧠", "운동선수": "🏅",
+    "초등학교교사": "📚", "프로게이머": "🎮", "수의사": "🐾", "배우": "🎭",
+    "비행기조종사": "✈️", "웹툰작가": "🖊️", "경찰관": "👮‍♂️", "범죄심리분석관": "🕵️‍♀️",
+    "상담전문가": "🫶", "약사": "💊", "한의사": "🌿", "간호사": "🩺",
+    "가수": "🎤", "회계사": "📊", "성우": "🎙️", "천문학연구원": "🔭",
+    "직업군인": "🪖", "소설가": "📖", "중학교교사": "🏫", "비행기승무원": "🧳",
+    "건축사": "🏛️", "기계공학 연구원": "⚙️", "크리에이터": "📹", "유치원교사": "🧸",
+    "변호사": "⚖️", "물리학연구원": "🧪", "의사": "🩻", "소방관": "🚒",
+    "생물학연구원": "🧬", "심리학연구원": "🧩", "일러스트레이터": "🎨", "조리사": "🍳",
+    "메이크업아티스트": "💄", "패션디자이너": "👗", "외교관": "🌍", "화학공학기술자": "🧫",
+    "배터리기술자": "🔋", "유전자 재조합 식품 전문가": "🧫", "게임기획자": "🗺️", "동물조련사": "🦮",
+    "통역가": "🗣️", "스마트공장 기술자": "🏭", "만화가": "✏️", "로봇연구원": "🤖",
+    "캐릭터디자이너": "🧸", "신약개발연구원": "🧪", "바리스타": "☕", "화가": "🖼️",
+    "비디오게임디자이너": "🕹️", "치과의사": "🦷", "판사": "🧑‍⚖️", "노무사": "🧾",
+    "항공우주공학기술자": "🚀", "감성인식기술전문가": "💡", "애니메이터": "🎞️", "스포츠트레이너": "💪",
+}
+
+# =============================
 # Scoring (키워드 매칭)
 # =============================
 def tokenize(text: str) -> List[str]:
@@ -199,11 +223,6 @@ def generate_ai_interpretation(
     user_profile: Dict[str, str],
     top_jobs: List[Job],
 ) -> Tuple[str, Dict[str, str]]:
-    """
-    반환:
-    - profile_summary: 사용자 패턴 해석(2~4문장)
-    - job_reasons: {직업명: "2문장"}
-    """
     client = OpenAI(api_key=api_key)
 
     jobs_payload = [
@@ -242,19 +261,15 @@ def generate_ai_interpretation(
 - 과장/단정(예: '반드시 성공') 금지. 현실적인 표현 사용.
 """.strip()
 
-    resp = client.responses.create(
-        model=model,
-        input=prompt,
-    )
-
+    resp = client.responses.create(model=model, input=prompt)
     text = (resp.output_text or "").strip()
+
     try:
         data = json.loads(text)
         profile_summary = str(data.get("profile_summary", "")).strip()
 
-        job_reasons_list = data.get("job_reasons", [])
         job_reason_map: Dict[str, str] = {}
-        for item in job_reasons_list:
+        for item in data.get("job_reasons", []):
             name = str(item.get("job_name", "")).strip()
             reason = str(item.get("reason", "")).strip()
             if name:
@@ -316,7 +331,7 @@ with st.form("career_form"):
     submit = st.form_submit_button("추천 받기", type="primary")
 
 # =============================
-# Validation + Result
+# Result
 # =============================
 if submit:
     missing = []
@@ -331,11 +346,9 @@ if submit:
         st.error(f"필수 항목을 제출해야 해요: {', '.join(missing)}")
         st.stop()
 
-    # Top 3 추천
     scored: List[Tuple[Job, int]] = [(job, score_job(job, interest_field, mbti, major_text)) for job in JOBS]
     top3 = [j for (j, _) in sorted(scored, key=lambda x: (x[1], x[0].name), reverse=True)[:3]]
 
-    # OpenAI 해석
     profile_summary = ""
     ai_reason_map: Dict[str, str] = {}
 
@@ -365,45 +378,164 @@ if submit:
     st.divider()
     st.subheader("✨ 추천 결과")
 
-    if profile_summary:
-        st.markdown("#### 🧠 AI 해석")
-        st.write(profile_summary)
-
-    # 카드 스타일
+    # =============================
+    # Pretty styles (카드뉴스 느낌)
+    # =============================
     st.markdown(
         """
         <style>
-        .card {
-            border: 1px solid rgba(0,0,0,0.08);
-            border-radius: 16px;
+        .hero {
             padding: 18px 18px 14px 18px;
+            border-radius: 18px;
+            border: 1px solid rgba(0,0,0,0.08);
+            background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(245,247,255,0.95));
+            box-shadow: 0 10px 26px rgba(0,0,0,0.06);
             margin-bottom: 14px;
-            background: #ffffff;
-            box-shadow: 0 6px 18px rgba(0,0,0,0.06);
         }
-        .card h3 { margin: 10px 0 6px 0; }
+        .hero-title {
+            font-size: 18px;
+            font-weight: 700;
+            margin: 0 0 8px 0;
+        }
+        .hero-body {
+            margin: 0;
+            line-height: 1.65;
+            font-size: 15px;
+        }
+
+        .cards {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 14px;
+        }
+
+        .cardnews {
+            position: relative;
+            overflow: hidden;
+            border-radius: 20px;
+            padding: 18px 18px 16px 18px;
+            border: 1px solid rgba(0,0,0,0.08);
+            background: #ffffff;
+            box-shadow: 0 12px 28px rgba(0,0,0,0.08);
+        }
+        .cardnews::before{
+            content:"";
+            position:absolute;
+            left:-20%;
+            top:-40%;
+            width: 70%;
+            height: 150%;
+            background: radial-gradient(circle at 30% 30%, rgba(99,102,241,0.18), rgba(255,255,255,0));
+            transform: rotate(12deg);
+        }
+        .card-header{
+            position:relative;
+            display:flex;
+            align-items:center;
+            justify-content:space-between;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .rank {
+            font-size: 12px;
+            font-weight: 700;
+            padding: 5px 10px;
+            border-radius: 999px;
+            background: rgba(0,0,0,0.05);
+        }
+        .job-title {
+            position:relative;
+            display:flex;
+            align-items:center;
+            gap: 10px;
+            font-size: 22px;
+            font-weight: 800;
+            margin: 0;
+        }
+        .emoji-badge{
+            width: 40px;
+            height: 40px;
+            border-radius: 14px;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            font-size: 22px;
+            background: rgba(99,102,241,0.12);
+            border: 1px solid rgba(99,102,241,0.20);
+        }
+        .subtitle {
+            position:relative;
+            margin: 6px 0 10px 0;
+            color: rgba(0,0,0,0.72);
+            line-height: 1.55;
+            font-size: 15px;
+        }
         .meta {
+            position:relative;
             display:flex;
             gap:8px;
             flex-wrap:wrap;
-            margin-bottom: 8px;
+            margin: 10px 0 8px 0;
         }
         .pill {
             display:inline-block;
-            padding: 4px 10px;
+            padding: 5px 10px;
             border-radius: 999px;
             background: rgba(0,0,0,0.04);
             font-size: 12px;
+            border: 1px solid rgba(0,0,0,0.05);
         }
-        .reason { margin: 8px 0 0 0; line-height: 1.6; }
+        .section-title{
+            position:relative;
+            margin-top: 10px;
+            font-weight: 800;
+            font-size: 13px;
+            letter-spacing: -0.2px;
+            color: rgba(0,0,0,0.75);
+        }
+        .keywords {
+            position:relative;
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            margin-top: 8px;
+        }
+        .tag {
+            display:inline-block;
+            padding: 6px 10px;
+            border-radius: 12px;
+            background: rgba(17,24,39,0.04);
+            font-size: 12px;
+            border: 1px dashed rgba(17,24,39,0.18);
+        }
+        .reason {
+            position:relative;
+            margin-top: 10px;
+            line-height: 1.7;
+            font-size: 14px;
+        }
         </style>
         """,
         unsafe_allow_html=True,
     )
 
+    # AI 해석 박스(있을 때만)
+    if profile_summary:
+        st.markdown(
+            f"""
+            <div class="hero">
+                <div class="hero-title">🧠 AI 해석</div>
+                <p class="hero-body">{profile_summary}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    # 카드뉴스 3개
     for idx, job in enumerate(top3, start=1):
+        emoji = JOB_EMOJI.get(job.name, "✨")
+
         pills = [
-            f"<span class='pill'>#{idx}</span>",
             f"<span class='pill'>연령: {age_group}</span>",
             f"<span class='pill'>학력: {education}</span>",
             f"<span class='pill'>관심분야: {interest_field}</span>",
@@ -413,23 +545,37 @@ if submit:
         if major_text.strip():
             pills.append("<span class='pill'>전공 입력됨</span>")
 
+        # 키워드(상위 6개만)
+        keyword_tags = "".join([f"<span class='tag'>#{k}</span>" for k in job.keywords[:6]])
+
+        # 추천 이유(2문장)
         ai_reason = ai_reason_map.get(job.name)
-        if ai_reason:
-            reason_html = f"• {ai_reason}"
-        else:
-            # 폴백도 2문장으로 유지
-            reason_html = (
-                "• 관심 분야와 직무 성격이 잘 맞고, 현재 단계에서 탐색/준비를 시작하기 좋은 선택지예요. "
-                "• 관련 프로젝트·인턴·동아리로 작은 경험을 쌓아 적합도를 확인해보세요."
+        if not ai_reason:
+            ai_reason = (
+                "관심 분야와 직무 성격이 잘 맞고, 현재 단계에서 탐색/준비를 시작하기 좋은 선택지예요. "
+                "관련 프로젝트·인턴·동아리로 작은 경험을 쌓아 적합도를 확인해보세요."
             )
 
         st.markdown(
             f"""
-            <div class="card">
+            <div class="cardnews">
+                <div class="card-header">
+                    <div class="job-title">
+                        <div class="emoji-badge">{emoji}</div>
+                        <span>{job.name}</span>
+                    </div>
+                    <div class="rank">TOP {idx}</div>
+                </div>
+
+                <div class="subtitle">{job.one_liner}</div>
+
                 <div class="meta">{' '.join(pills)}</div>
-                <h3>{job.name}</h3>
-                <div>{job.one_liner}</div>
-                <p class="reason"><b>왜 추천했나요?</b><br/>{reason_html}</p>
+
+                <div class="section-title">핵심 키워드</div>
+                <div class="keywords">{keyword_tags}</div>
+
+                <div class="section-title" style="margin-top:12px;">추천 이유</div>
+                <div class="reason">• {ai_reason}</div>
             </div>
             """,
             unsafe_allow_html=True,
