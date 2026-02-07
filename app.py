@@ -1,249 +1,347 @@
-import requests
+import re
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Optional
+
 import streamlit as st
 
-st.set_page_config(page_title="나와 어울리는 영화는?", page_icon="🎬", layout="centered")
+st.set_page_config(page_title="대학생 진로 추천", page_icon="🧭", layout="centered")
 
-# -----------------------------
-# Sidebar: TMDB API Key 입력
-# -----------------------------
-st.sidebar.header("TMDB 설정")
-api_key = st.sidebar.text_input("TMDB API Key", type="password", placeholder="여기에 붙여넣기")
-
-st.title("🎬 나와 어울리는 영화는?")
+# =============================
+# Header
+# =============================
+st.title("🧭 대학생 진로 추천 웹사이트")
 st.write(
-    "5개의 질문에 답하면, 당신의 영화 취향(로맨스/드라마 · 액션/어드벤처 · SF/판타지 · 코미디)을 바탕으로 "
-    "TMDB 인기 영화 5편을 추천해줘요."
+    "필수 정보(연령·학력·관심분야)와 선택 정보(성격·전공)를 입력하면, "
+    "키워드 매칭을 통해 **어울리는 직업 3개**와 **추천 이유**를 보여줘요."
 )
-
 st.divider()
 
-# -----------------------------
-# 질문/선택지 데이터
-# -----------------------------
-questions = [
-    {
-        "q": "1) 시험 끝나고 갑자기 하루가 비었어. 너는?",
-        "options": [
-            "A. 잔잔한 카페에 앉아 오늘 하루를 정리한다 (로맨스/드라마)",
-            "B. 즉흥으로 당일치기 여행이나 드라이브를 떠난다 (액션/어드벤처)",
-            "C. 집에서 세계관 큰 작품을 몰아본다 (SF/판타지)",
-            "D. 친구랑 만나서 웃긴 썰 풀며 스트레스 푼다 (코미디)",
-        ],
-    },
-    {
-        "q": "2) 단톡방에서 “오늘 뭐 할래?” 했을 때 네 반응은?",
-        "options": [
-            "A. 둘이 조용히 산책하면서 깊은 얘기하고 싶어 (로맨스/드라마)",
-            "B. 방탈출/서바이벌 게임/스포츠처럼 활동적인 거 콜! (액션/어드벤처)",
-            "C. 전시·우주/테크 체험·보드게임처럼 신기한 걸 하고 싶어 (SF/판타지)",
-            "D. 스탠드업/코미디 영화/예능 보면서 깔깔대고 싶어 (코미디)",
-        ],
-    },
-    {
-        "q": "3) 팀플에서 네가 주로 맡는 역할은?",
-        "options": [
-            "A. 분위기 조율하고 서로 감정 상하지 않게 챙기는 편 (로맨스/드라마)",
-            "B. “내가 이끈다!” 일정/역할 분배 확실히 밀어붙이는 편 (액션/어드벤처)",
-            "C. 자료 조사·기획 설계·새로운 아이디어 내는 데 강함 (SF/판타지)",
-            "D. 발표나 회의 때 센스 있는 한마디로 긴장 푸는 편 (코미디)",
-        ],
-    },
-    {
-        "q": "4) 낯선 과제/상황이 생겼을 때 너의 첫 반응은?",
-        "options": [
-            "A. 의미를 찾고 내 감정부터 정리해본다 (로맨스/드라마)",
-            "B. 일단 부딪혀 보고 해결하면서 배우는 타입 (액션/어드벤처)",
-            "C. “이건 시스템을 바꾸면 되겠는데?” 구조부터 분석한다 (SF/판타지)",
-            "D. “이거 완전 밈 각인데?” 가볍게 넘기며 웃음 포인트 찾는다 (코미디)",
-        ],
-    },
-    {
-        "q": "5) 네 휴대폰 갤러리/최근 저장 목록에 가장 가까운 건?",
-        "options": [
-            "A. 하늘·노을·감성 사진, 가사 캡처, 기록들 (로맨스/드라마)",
-            "B. 운동/여행/활동 사진, 지도 캡처, 도전 인증샷 (액션/어드벤처)",
-            "C. 세계관 설정, 과학/기술 영상, 신기한 정보 저장 (SF/판타지)",
-            "D. 짤·릴스·웃긴 영상, 친구 놀릴(?) 밈 모음 (코미디)",
-        ],
-    },
+# =============================
+# Data Model
+# =============================
+@dataclass
+class Job:
+    name: str
+    one_liner: str
+    fields: List[str]          # 관심분야 매핑: 인문/사회/교육/공학/자연/의학/예체능
+    keywords: List[str]        # 직업 관련 키워드
+    mbti_hints: List[str]      # 어울리는 MBTI 힌트
+    major_hints: List[str]     # 전공 키워드 힌트
+
+
+# =============================
+# Jobs Database (요청 직업 목록 포함)
+# =============================
+JOBS: List[Job] = [
+    Job("선장", "선박을 지휘하고 항해·안전을 총괄하는 해양 리더.", ["공학", "자연", "사회"],
+        ["바다", "항해", "선박", "해양", "운항", "안전", "리더십"], ["ESTJ","ENTJ","ISTJ"], ["해양", "조선", "항해", "물류"]),
+    Job("제과사", "빵·디저트를 기획하고 만드는 푸드 크리에이터.", ["예체능", "사회"],
+        ["디저트", "빵", "베이킹", "레시피", "위생", "매장"], ["ISFP","ESFP","ENFP"], ["식품", "조리", "호텔", "외식"]),
+    Job("반도체공학기술자", "반도체 소자·공정·설계를 연구·개발하는 엔지니어.", ["공학", "자연"],
+        ["반도체", "회로", "공정", "칩", "설계", "클린룸"], ["INTJ","ISTJ","ENTJ"], ["전자", "전기", "반도체", "재료"]),
+    Job("운동선수", "훈련과 경기로 기록과 성과를 만드는 퍼포머.", ["예체능"],
+        ["훈련", "경기", "체력", "대회", "기록", "팀"], ["ESTP","ESFP","ISTP"], ["체육", "스포츠"]),
+    Job("초등학교교사", "초등학생의 학습·성장을 돕는 교육 전문가.", ["교육", "인문", "사회"],
+        ["교육", "아동", "수업", "학급", "생활지도"], ["ENFJ","ESFJ","ISFJ"], ["교육", "아동", "초등"]),
+    Job("프로게이머", "게임 실력과 전략으로 경쟁하는 e스포츠 선수.", ["예체능", "공학"],
+        ["게임", "대회", "전략", "팀", "연습", "피드백"], ["ISTP","INTP","ESTP"], ["게임", "컴퓨터", "e스포츠"]),
+    Job("수의사", "동물의 질병을 진단·치료하고 건강을 관리하는 의료인.", ["의학", "자연"],
+        ["동물", "진료", "치료", "수술", "예방", "보호자"], ["ISFJ","INFJ","ISTJ"], ["수의", "생명", "바이오"]),
+    Job("배우", "캐릭터를 해석해 연기와 표현으로 이야기를 전달하는 아티스트.", ["예체능", "인문"],
+        ["연기", "무대", "촬영", "캐릭터", "표현", "오디션"], ["ENFP","ESFP","INFJ"], ["연극", "영화", "방송"]),
+    Job("비행기조종사", "항공기를 안전하게 운항하며 항로·상황을 통제하는 전문가.", ["공학", "자연"],
+        ["항공", "조종", "안전", "운항", "기상", "관제"], ["ISTJ","ESTJ","INTJ"], ["항공", "기계", "운항"]),
+    Job("웹툰작가", "스토리와 그림으로 연재 콘텐츠를 만드는 크리에이터.", ["예체능", "인문"],
+        ["웹툰", "스토리", "작화", "연재", "캐릭터", "콘티"], ["INFP","ISFP","INTP"], ["만화", "디자인", "일러스트"]),
+    Job("경찰관", "치안 유지와 범죄 예방·대응을 담당하는 공공안전 직무.", ["사회"],
+        ["치안", "범죄", "현장", "수사", "안전", "공공"], ["ESTJ","ISTJ","ESFJ"], ["경찰", "행정", "법"]),
+    Job("범죄심리분석관", "범죄자 행동·심리를 분석해 수사 전략을 돕는 전문가.", ["사회", "인문"],
+        ["범죄", "심리", "프로파일링", "분석", "수사", "행동"], ["INTJ","INFJ","INTP"], ["심리", "범죄", "사회"]),
+    Job("상담전문가", "개인의 고민을 듣고 해결을 돕는 심리·상담 전문가.", ["사회", "교육", "인문"],
+        ["상담", "공감", "심리", "치유", "코칭", "관계"], ["INFJ","ENFJ","ISFJ"], ["상담", "심리", "교육"]),
+    Job("약사", "약을 조제·복약지도하며 약물 안전을 관리하는 전문가.", ["의학", "자연"],
+        ["약", "조제", "복약지도", "약물", "안전", "약국"], ["ISTJ","ISFJ","INTJ"], ["약학", "생명", "화학"]),
+    Job("한의사", "한방 진단과 치료로 건강을 관리하는 의료 전문가.", ["의학"],
+        ["한의학", "진단", "치료", "침", "한약", "건강"], ["INFJ","ISFJ","ISTJ"], ["한의", "보건"]),
+    Job("간호사", "환자 케어와 임상 지원을 수행하는 의료 현장 핵심 인력.", ["의학"],
+        ["간호", "환자", "병원", "케어", "협업", "임상"], ["ESFJ","ISFJ","ENFJ"], ["간호", "보건"]),
+    Job("가수", "노래와 무대 퍼포먼스로 감정을 전달하는 뮤지션.", ["예체능"],
+        ["음악", "보컬", "무대", "연습", "공연", "팬"], ["ENFP","ESFP","ISFP"], ["실용음악", "보컬", "음악"]),
+    Job("회계사", "재무제표·감사·세무로 기업의 숫자를 책임지는 전문가.", ["사회"],
+        ["회계", "감사", "세무", "재무", "분석", "자격"], ["ISTJ","INTJ","ESTJ"], ["회계", "경영", "경제"]),
+    Job("성우", "목소리 연기로 캐릭터를 살리는 보이스 아티스트.", ["예체능", "인문"],
+        ["목소리", "더빙", "연기", "녹음", "발성", "캐릭터"], ["INFP","ENFP","ISFP"], ["방송", "연기", "미디어"]),
+    Job("천문학연구원", "우주 현상을 관측·분석해 과학 지식을 확장하는 연구자.", ["자연"],
+        ["우주", "천문", "관측", "연구", "데이터", "물리"], ["INTP","INTJ","INFJ"], ["천문", "물리", "수학"]),
+    Job("직업군인", "국방 임무를 수행하며 조직 운영과 훈련을 담당하는 직무.", ["사회"],
+        ["국방", "훈련", "작전", "규율", "조직", "리더십"], ["ISTJ","ESTJ","ENTJ"], ["군사", "행정", "체육"]),
+    Job("소설가", "이야기와 문장으로 세계를 창조하는 작가.", ["인문"],
+        ["글쓰기", "서사", "창작", "출판", "아이디어", "문학"], ["INFP","INFJ","INTP"], ["문예", "국문", "창작"]),
+    Job("중학교교사", "청소년 학습과 진로 성장을 돕는 교육 전문가.", ["교육", "인문", "사회"],
+        ["교육", "수업", "청소년", "생활지도", "평가"], ["ENFJ","ESFJ","INFJ"], ["교육", "사범", "전공교과"]),
+    Job("비행기승무원", "기내 안전과 서비스를 책임지는 항공 서비스 전문가.", ["사회"],
+        ["서비스", "기내", "안전", "응대", "항공", "여행"], ["ESFJ","ENFJ","ISFJ"], ["항공", "관광", "서비스"]),
+    Job("건축사", "공간을 설계하고 프로젝트를 총괄하는 건축 전문가.", ["공학", "예체능"],
+        ["건축", "설계", "도면", "공간", "프로젝트", "현장"], ["INTJ","ENTJ","ISTJ"], ["건축", "도시", "디자인"]),
+    Job("기계공학 연구원", "기계 시스템을 연구·개발해 성능을 개선하는 연구자.", ["공학"],
+        ["기계", "설계", "해석", "실험", "연구", "제조"], ["INTJ","ISTJ","INTP"], ["기계", "항공", "자동차"]),
+    Job("크리에이터", "콘텐츠를 기획·제작해 팬과 소통하는 1인 미디어.", ["예체능", "사회"],
+        ["콘텐츠", "영상", "기획", "편집", "SNS", "브랜딩"], ["ENFP","ESFP","ENTP"], ["미디어", "광고", "방송"]),
+    Job("유치원교사", "유아의 놀이·발달을 돕는 유아교육 전문가.", ["교육"],
+        ["유아", "놀이", "교육", "발달", "돌봄", "관찰"], ["ESFJ","ISFJ","ENFJ"], ["유아", "아동", "교육"]),
+    Job("변호사", "법률 문제를 해결하고 권리를 보호하는 전문가.", ["사회"],
+        ["법", "소송", "자문", "논리", "증거", "권리"], ["ENTJ","INTJ","ESTJ"], ["법학", "정치", "행정"]),
+    Job("물리학연구원", "자연 법칙을 탐구하고 기술 기반을 만드는 연구자.", ["자연", "공학"],
+        ["물리", "연구", "실험", "이론", "데이터", "수학"], ["INTP","INTJ","INFJ"], ["물리", "수학", "전자"]),
+    Job("의사", "질병을 진단·치료하며 환자의 건강을 책임지는 의료인.", ["의학"],
+        ["진단", "치료", "환자", "병원", "의학", "수술"], ["ISTJ","INFJ","ESTJ"], ["의학", "생명", "보건"]),
+    Job("소방관", "재난·화재 현장에서 구조와 안전을 수행하는 공공안전 직무.", ["사회"],
+        ["재난", "구조", "화재", "안전", "현장", "대응"], ["ESTP","ISTP","ESTJ"], ["소방", "안전", "응급"]),
+    Job("생물학연구원", "생명 현상과 생물 시스템을 연구하는 과학자.", ["자연", "의학"],
+        ["생물", "연구", "실험", "세포", "생명", "데이터"], ["INTP","INFJ","INTJ"], ["생명", "바이오", "생물"]),
+    Job("심리학연구원", "인간 행동·마음을 연구해 근거 기반 지식을 만드는 연구자.", ["사회", "인문"],
+        ["심리", "연구", "실험", "통계", "행동", "데이터"], ["INTP","INFJ","INTJ"], ["심리", "인지", "통계"]),
+    Job("일러스트레이터", "그림으로 메시지와 감성을 시각화하는 창작자.", ["예체능"],
+        ["일러스트", "그림", "디자인", "콘셉트", "의뢰"], ["INFP","ISFP","INTP"], ["디자인", "미술", "일러스트"]),
+    Job("조리사", "조리 기술로 메뉴를 만들고 주방을 운영하는 전문가.", ["예체능", "사회"],
+        ["요리", "주방", "메뉴", "위생", "식재료", "서비스"], ["ESFP","ISFP","ESTP"], ["조리", "외식", "호텔"]),
+    Job("메이크업아티스트", "메이크업으로 이미지·분위기를 연출하는 뷰티 전문가.", ["예체능"],
+        ["메이크업", "뷰티", "촬영", "트렌드", "연출"], ["ESFP","ENFP","ISFP"], ["뷰티", "미용", "디자인"]),
+    Job("패션디자이너", "의상을 기획·디자인해 컬렉션을 만드는 디자이너.", ["예체능"],
+        ["패션", "의상", "트렌드", "디자인", "브랜드"], ["ENFP","INFP","ENTP"], ["패션", "디자인", "의류"]),
+    Job("외교관", "국가 간 협상·외교를 수행하는 국제 관계 전문가.", ["사회", "인문"],
+        ["외교", "국제", "협상", "정책", "언어", "문화"], ["ENTJ","ENFJ","INTJ"], ["국제", "정치", "외교"]),
+    Job("화학공학기술자", "화학 공정으로 소재·제품을 대량 생산하는 엔지니어.", ["공학", "자연"],
+        ["화학", "공정", "소재", "플랜트", "안전", "생산"], ["ISTJ","INTJ","ENTJ"], ["화공", "화학", "재료"]),
+    Job("배터리기술자", "이차전지 소재·셀·공정을 개발하는 에너지 엔지니어.", ["공학", "자연"],
+        ["배터리", "이차전지", "에너지", "소재", "공정", "전기차"], ["INTJ","ISTJ","ENTJ"], ["재료", "화공", "전기"]),
+    Job("유전자 재조합 식품 전문가", "유전공학 기반 식품 기술을 연구·검증하는 전문가.", ["자연", "의학"],
+        ["유전자", "GMO", "식품", "바이오", "안전", "연구"], ["INTP","INTJ","INFJ"], ["식품", "생명", "바이오"]),
+    Job("게임기획자", "게임의 규칙·레벨·경제를 설계하는 기획자.", ["공학", "예체능"],
+        ["게임", "기획", "레벨", "밸런스", "스토리", "UX"], ["ENTP","INTP","ENFP"], ["게임", "컴퓨터", "기획"]),
+    Job("동물조련사", "동물 훈련과 행동 교정으로 안전한 교감을 돕는 전문가.", ["자연", "예체능"],
+        ["동물", "훈련", "행동", "교감", "안전"], ["ESFP","ISFP","ENFP"], ["동물", "생명", "수의"]),
+    Job("통역가", "언어를 실시간으로 전환해 소통을 돕는 전문가.", ["인문", "사회"],
+        ["통역", "언어", "회의", "동시", "문화", "커뮤니케이션"], ["ENFJ","ENTP","INFJ"], ["영어", "통번역", "언어"]),
+    Job("스마트공장 기술자", "자동화·데이터로 공정을 최적화하는 제조 혁신 기술자.", ["공학"],
+        ["스마트공장", "자동화", "센서", "데이터", "PLC", "제조"], ["ISTJ","INTJ","ENTJ"], ["산업", "자동화", "메카트로닉스"]),
+    Job("만화가", "스토리와 그림으로 만화를 만드는 창작자.", ["예체능", "인문"],
+        ["만화", "작화", "스토리", "연재", "캐릭터", "콘티"], ["INFP","ISFP","INTP"], ["만화", "디자인", "일러스트"]),
+    Job("로봇연구원", "로봇 하드웨어·제어·AI를 연구하는 엔지니어.", ["공학", "자연"],
+        ["로봇", "제어", "AI", "센서", "연구", "자동화"], ["INTJ","INTP","ISTJ"], ["로봇", "기계", "전기"]),
+    Job("캐릭터디자이너", "캐릭터의 형태·성격을 시각적으로 설계하는 디자이너.", ["예체능"],
+        ["캐릭터", "디자인", "설정", "콘셉트", "IP"], ["INFP","ISFP","ENFP"], ["디자인", "애니", "일러스트"]),
+    Job("신약개발연구원", "신약 후보를 발굴·검증해 치료제를 만드는 연구자.", ["의학", "자연"],
+        ["신약", "바이오", "임상", "연구", "화합물", "실험"], ["INTJ","INTP","INFJ"], ["약학", "생명", "화학"]),
+    Job("바리스타", "커피를 추출·설계하고 매장을 운영하는 음료 전문가.", ["사회", "예체능"],
+        ["커피", "추출", "원두", "라떼", "서비스", "매장"], ["ESFP","ISFP","ENFP"], ["호텔", "외식", "식음료"]),
+    Job("화가", "회화로 감정과 메시지를 표현하는 순수예술가.", ["예체능"],
+        ["회화", "미술", "작품", "전시", "표현", "창작"], ["INFP","ISFP","INFJ"], ["미술", "회화", "디자인"]),
+    Job("비디오게임디자이너", "게임의 시각·레벨·경험을 디자인하는 디자이너.", ["공학", "예체능"],
+        ["게임", "디자인", "레벨", "아트", "UX", "인터랙션"], ["ENTP","INFP","INTP"], ["게임", "디자인", "컴퓨터"]),
+    Job("치과의사", "구강 건강을 진단·치료하는 의료 전문가.", ["의학"],
+        ["치과", "구강", "치료", "교정", "진단", "시술"], ["ISTJ","ISFJ","INTJ"], ["치의", "보건"]),
+    Job("판사", "법과 증거로 판단을 내리는 사법부 핵심 직무.", ["사회"],
+        ["재판", "판결", "법", "논리", "공정", "증거"], ["INTJ","ISTJ","ENTJ"], ["법학", "정치"]),
+    Job("노무사", "노동법·인사 이슈를 해결하는 노동·HR 전문가.", ["사회"],
+        ["노동", "인사", "노무", "법", "분쟁", "자문"], ["ISTJ","ENTJ","INTJ"], ["노무", "경영", "법"]),
+    Job("항공우주공학기술자", "항공기·우주체 시스템을 설계·해석하는 엔지니어.", ["공학", "자연"],
+        ["항공우주", "로켓", "위성", "설계", "해석", "추진"], ["INTJ","ISTJ","ENTJ"], ["항공우주", "기계", "전기"]),
+    Job("감성인식기술전문가", "감정·표현 데이터를 분석해 인식 기술을 만드는 전문가.", ["공학", "자연", "사회"],
+        ["감성", "AI", "인식", "데이터", "음성", "표정"], ["INTP","INTJ","ENTP"], ["AI", "컴퓨터", "심리"]),
+    Job("애니메이터", "움직임으로 캐릭터에 생명을 불어넣는 창작자.", ["예체능"],
+        ["애니", "움직임", "작화", "연출", "캐릭터", "영상"], ["INFP","ISFP","ENFP"], ["애니", "영상", "디자인"]),
+    Job("스포츠트레이너", "운동 프로그램과 재활로 몸 상태를 관리하는 전문가.", ["예체능", "의학"],
+        ["트레이닝", "재활", "운동", "체력", "코칭", "근골격"], ["ESTP","ESFP","ISFJ"], ["스포츠", "재활", "체육"]),
 ]
 
-# -----------------------------
-# 유틸: 선택지 -> 성향 카테고리
-# -----------------------------
-CATEGORY_LABELS = {
-    "romance_drama": "(로맨스/드라마)",
-    "action_adventure": "(액션/어드벤처)",
-    "sf_fantasy": "(SF/판타지)",
-    "comedy": "(코미디)",
-}
+# =============================
+# Matching helpers
+# =============================
+MBTI_LIST = [
+    "INTJ","INTP","ENTJ","ENTP",
+    "INFJ","INFP","ENFJ","ENFP",
+    "ISTJ","ISFJ","ESTJ","ESFJ",
+    "ISTP","ISFP","ESTP","ESFP",
+]
 
-CATEGORY_NAME_KO = {
-    "romance_drama": "로맨스/드라마",
-    "action_adventure": "액션/어드벤처",
-    "sf_fantasy": "SF/판타지",
-    "comedy": "코미디",
-}
+def tokenize(text: str) -> List[str]:
+    if not text:
+        return []
+    return re.findall(r"[A-Za-z가-힣0-9]+", text.lower())
 
-# TMDB 장르 ID (요구사항 기반)
-CATEGORY_TO_GENRE_IDS = {
-    "romance_drama": [18, 10749],   # 드라마, 로맨스 (둘 다 섞어서 추천)
-    "action_adventure": [28],       # 액션
-    "sf_fantasy": [878, 14],        # SF, 판타지 (둘 다 섞어서 추천)
-    "comedy": [35],                 # 코미디
-}
+def score_job(
+    job: Job,
+    interest_field: str,
+    mbti: Optional[str],
+    major_text: str,
+) -> Tuple[int, List[str]]:
+    score = 0
+    reasons: List[str] = []
 
-def infer_category_from_choice(choice_text: str) -> str:
-    for cat, label in CATEGORY_LABELS.items():
-        if label in choice_text:
-            return cat
-    return "romance_drama"  # fallback
-
-def decide_best_category(answers: list[str]) -> str:
-    counts = {k: 0 for k in CATEGORY_LABELS.keys()}
-    for a in answers:
-        if not a:
-            continue
-        cat = infer_category_from_choice(a)
-        counts[cat] += 1
-
-    # 최다 득표 카테고리 (동점이면 고정 우선순위로 결정)
-    priority = ["romance_drama", "action_adventure", "sf_fantasy", "comedy"]
-    best = max(priority, key=lambda c: (counts[c], -priority.index(c)))
-    return best
-
-# -----------------------------
-# TMDB 호출
-# -----------------------------
-TMDB_DISCOVER_URL = "https://api.themoviedb.org/3/discover/movie"
-TMDB_POSTER_BASE = "https://image.tmdb.org/t/p/w500"
-
-@st.cache_data(show_spinner=False, ttl=60 * 30)  # 30분 캐시
-def fetch_popular_movies_by_genres(api_key: str, genre_ids: list[int], language: str = "ko-KR", limit: int = 5):
-    """
-    genre_ids가 여러 개인 경우, 각 장르로 discover 호출 후 합쳐서 인기순으로 상위 limit개 반환.
-    """
-    all_movies = []
-    seen = set()
-
-    for gid in genre_ids:
-        params = {
-            "api_key": api_key,
-            "with_genres": gid,
-            "language": language,
-            "sort_by": "popularity.desc",
-            "page": 1,
-        }
-        r = requests.get(TMDB_DISCOVER_URL, params=params, timeout=15)
-        r.raise_for_status()
-        data = r.json()
-        results = data.get("results", [])
-
-        for m in results:
-            mid = m.get("id")
-            if not mid or mid in seen:
-                continue
-            seen.add(mid)
-            all_movies.append(m)
-
-    # popularity 기준 정렬 후 포스터 있는 것 위주로
-    all_movies.sort(key=lambda x: x.get("popularity", 0), reverse=True)
-    all_movies = [m for m in all_movies if m.get("poster_path")]
-
-    return all_movies[:limit]
-
-def build_reason(category: str, movie: dict) -> str:
-    rating = movie.get("vote_average", 0) or 0
-    pop = movie.get("popularity", 0) or 0
-
-    base = {
-        "romance_drama": "당신의 답변이 감정선과 관계/성장 서사 쪽으로 기울어 있어요.",
-        "action_adventure": "당신의 답변이 도전/스릴/속도감 쪽으로 강하게 나타났어요.",
-        "sf_fantasy": "당신의 답변이 상상력/세계관/새로운 설정에 끌리는 편이에요.",
-        "comedy": "당신의 답변이 가벼운 웃음과 분위기 전환을 중요하게 보여줘요.",
-    }.get(category, "당신의 선택 성향과 잘 맞는 작품이에요.")
-
-    # 아주 간단한 이유 템플릿
-    if rating >= 7.5:
-        extra = "평점도 높아서 만족도가 좋은 편이라 추천해요."
-    elif pop >= 200:
-        extra = "지금 많은 사람들이 보고 있는 인기작이라 추천해요."
+    # 1) 관심분야 일치 (가장 큰 가중치)
+    if interest_field in job.fields:
+        score += 60
+        reasons.append(f"관심분야가 **{interest_field}**이고, 이 직업이 해당 분야와 직접적으로 연결돼요.")
     else:
-        extra = "장르 톤이 잘 맞고 부담 없이 보기 좋아서 추천해요."
+        score += 5  # 완전 배제하지 않기 위한 기본점
 
-    return f"{base} {extra}"
+    # 2) MBTI 힌트
+    if mbti and mbti in job.mbti_hints:
+        score += 18
+        reasons.append(f"선택한 MBTI(**{mbti}**) 성향이 이 직업의 업무 스타일과 잘 맞는 편이에요.")
 
-# -----------------------------
-# 질문 UI
-# -----------------------------
-answers = []
-for i, item in enumerate(questions, start=1):
-    ans = st.radio(
-        item["q"],
-        item["options"],
-        key=f"q{i}",
-        index=None,  # 처음엔 선택 안 된 상태
+    # 3) 전공(텍스트) 매칭: 힌트 단어/키워드가 포함되면 가점
+    tokens = tokenize(major_text)
+    if tokens:
+        hits = []
+        for hint in (job.major_hints + job.keywords):
+            h = hint.lower()
+            if any(h in t or t in h for t in tokens):
+                hits.append(hint)
+        if hits:
+            score += 24
+            reasons.append(f"입력한 전공/키워드가 관련 분야({', '.join(hits[:3])})와 맞닿아 있어요.")
+
+    # 이유 2~3개로 제한
+    if len(reasons) > 3:
+        reasons = reasons[:3]
+
+    return score, reasons
+
+# =============================
+# UI: Form
+# =============================
+with st.form("career_form"):
+    st.subheader("필수 정보")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        age_group = st.selectbox(
+            "연령",
+            ["선택", "18-19", "20-22", "23-25", "26-29", "30+"],
+            index=0,
+        )
+    with c2:
+        education = st.selectbox(
+            "학력",
+            ["선택", "고졸", "대학교 재학", "대졸", "대학원 졸업"],
+            index=0,
+        )
+    with c3:
+        interest_field = st.selectbox(
+            "관심분야",
+            ["선택", "인문", "사회", "교육", "공학", "자연", "의학", "예체능"],
+            index=0,
+        )
+
+    st.divider()
+    st.subheader("선택 정보")
+
+    c4, c5 = st.columns([1, 2])
+    with c4:
+        mbti_raw = st.selectbox("성격(MBTI)", ["선택 안 함"] + MBTI_LIST, index=0)
+        mbti = None if mbti_raw == "선택 안 함" else mbti_raw
+    with c5:
+        major_text = st.text_input("전공(자유 입력)", placeholder="예: 컴퓨터공학, 심리학, 국제관계학, 디자인 등")
+
+    submit = st.form_submit_button("추천 받기", type="primary")
+
+# =============================
+# Validation + Result
+# =============================
+if submit:
+    missing = []
+    if age_group == "선택":
+        missing.append("연령")
+    if education == "선택":
+        missing.append("학력")
+    if interest_field == "선택":
+        missing.append("관심분야")
+
+    if missing:
+        st.error(f"필수 항목을 제출해야 해요: {', '.join(missing)}")
+        st.stop()
+
+    # 점수 계산
+    scored: List[Tuple[Job, int, List[str]]] = []
+    for job in JOBS:
+        s, reasons = score_job(job, interest_field, mbti, major_text)
+        scored.append((job, s, reasons))
+
+    # 상위 3개 선택 (동점 안정화: 이름순)
+    top3 = sorted(scored, key=lambda x: (x[1], x[0].name), reverse=True)[:3]
+
+    st.divider()
+    st.subheader("✨ 추천 결과")
+
+    # 카드 스타일
+    st.markdown(
+        """
+        <style>
+        .card {
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: 16px;
+            padding: 18px 18px 14px 18px;
+            margin-bottom: 14px;
+            background: #ffffff;
+            box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+        }
+        .card h3 { margin: 10px 0 6px 0; }
+        .meta {
+            display:flex;
+            gap:8px;
+            flex-wrap:wrap;
+            margin-bottom: 8px;
+        }
+        .pill {
+            display:inline-block;
+            padding: 4px 10px;
+            border-radius: 999px;
+            background: rgba(0,0,0,0.04);
+            font-size: 12px;
+        }
+        .reason { margin: 8px 0 0 0; line-height: 1.6; }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
-    answers.append(ans)
-    st.write("")
 
-st.divider()
+    for idx, (job, score, reasons) in enumerate(top3, start=1):
+        pills = [
+            f"<span class='pill'>#{idx}</span>",
+            f"<span class='pill'>연령: {age_group}</span>",
+            f"<span class='pill'>학력: {education}</span>",
+            f"<span class='pill'>관심분야: {interest_field}</span>",
+        ]
+        if mbti:
+            pills.append(f"<span class='pill'>MBTI: {mbti}</span>")
+        if major_text.strip():
+            pills.append("<span class='pill'>전공 입력됨</span>")
 
-# -----------------------------
-# 결과 보기 버튼
-# -----------------------------
-if st.button("결과 보기", type="primary"):
-    # 입력 검증
-    if not api_key:
-        st.error("사이드바에 TMDB API Key를 입력해줘!")
-        st.stop()
+        reason_html = "<br/>".join([f"• {r}" for r in reasons]) if reasons else "• 입력 정보와 직업 특성이 전반적으로 잘 맞아요."
 
-    if any(a is None for a in answers):
-        st.warning("5개 질문에 모두 답해야 결과를 볼 수 있어요.")
-        st.stop()
+        st.markdown(
+            f"""
+            <div class="card">
+                <div class="meta">{' '.join(pills)}</div>
+                <h3>{job.name}</h3>
+                <div>{job.one_liner}</div>
+                <p class="reason"><b>왜 추천했나요?</b><br/>{reason_html}</p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    with st.spinner("분석 중..."):
-        category = decide_best_category(answers)
-        genre_ids = CATEGORY_TO_GENRE_IDS[category]
+    with st.expander("내 입력 요약"):
+        st.write(
+            {
+                "연령": age_group,
+                "학력": education,
+                "관심분야": interest_field,
+                "MBTI": mbti or "선택 안 함",
+                "전공": major_text or "(미입력)",
+            }
+        )
 
-        try:
-            movies = fetch_popular_movies_by_genres(api_key, genre_ids, language="ko-KR", limit=5)
-        except requests.HTTPError as e:
-            st.error(f"TMDB 요청에 실패했어요. (HTTP 오류) {e}")
-            st.stop()
-        except requests.RequestException as e:
-            st.error(f"TMDB 요청 중 네트워크 오류가 발생했어요: {e}")
-            st.stop()
-
-    st.subheader(f"당신의 영화 취향: {CATEGORY_NAME_KO.get(category, category)}")
-    st.write("아래는 TMDB에서 가져온 인기 영화 추천 5편이에요.")
-
-    if not movies:
-        st.info("추천할 영화를 찾지 못했어요. (포스터가 없는 작품이 많거나 응답이 비어있을 수 있어요)")
-        st.stop()
-
-    for m in movies:
-        title = m.get("title") or m.get("name") or "제목 없음"
-        overview = m.get("overview") or "줄거리 정보가 없어요."
-        rating = m.get("vote_average", 0)
-        poster_path = m.get("poster_path")
-        poster_url = f"{TMDB_POSTER_BASE}{poster_path}" if poster_path else None
-
-        reason = build_reason(category, m)
-
-        st.markdown("---")
-        cols = st.columns([1, 2])
-
-        with cols[0]:
-            if poster_url:
-                st.image(poster_url, use_container_width=True)
-            else:
-                st.write("포스터 없음")
-
-        with cols[1]:
-            st.markdown(f"### {title}")
-            st.write(f"⭐ 평점: {rating:.1f}")
-            st.write(overview)
-            st.caption(f"💡 이 영화를 추천하는 이유: {reason}")
-
-
+st.caption("※ 본 추천은 키워드 매칭 기반 데모이며, 실제 진로 선택은 추가 탐색/상담을 권장해요.")
