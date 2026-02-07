@@ -39,8 +39,7 @@ openai_model = st.sidebar.text_input("모델명(선택)", value="gpt-5.2")
 st.title("🧭 대학생 진로 추천 웹사이트")
 st.write(
     "필수 정보(연령·학력·관심분야)와 선택 정보(성격·전공)를 입력하면, "
-    "**키워드 매칭**으로 어울리는 **직업 3개**를 추천해드려요. (데이터: 고용24 직업정보 API)\n\n"
-    "추가로 OpenAI API Key를 입력하면 **사용자 성향(1~2문장)**과 **AI 직무 요약/추천 이유(2~3문장)**도 보여줘요."
+    "**키워드 매칭**으로 어울리는 **직업 3개**를 추천해드려요. (데이터: 고용24 직업정보 API)"
 )
 st.divider()
 
@@ -279,7 +278,6 @@ def generate_ai_insights(
     resp = client.responses.create(model=model, input=prompt)
     text = (resp.output_text or "").strip()
 
-    # 파싱 + 폴백
     user_trait = ""
     job_ai: Dict[str, Dict[str, str]] = {}
 
@@ -297,7 +295,6 @@ def generate_ai_insights(
                 "ai_reason": (it.get("ai_reason") or "").strip(),
             }
 
-        # 누락 대비
         for j in jobs:
             cd = j.get("jobCd", "")
             if cd and cd not in job_ai:
@@ -307,13 +304,18 @@ def generate_ai_insights(
                 }
 
         if not user_trait:
-            user_trait = "관심 분야와 선택 정보(전공/성격)를 종합하면, 흥미가 지속될 수 있는 영역을 중심으로 탐색해보는 게 좋아 보여요. 작은 경험을 통해 빠르게 ‘맞는지’를 확인하는 방식이 잘 맞아요."
+            user_trait = (
+                "관심 분야와 선택 정보(전공/성격)를 종합하면, 흥미가 지속될 수 있는 영역을 중심으로 탐색해보는 게 좋아 보여요. "
+                "작은 경험을 통해 빠르게 ‘맞는지’를 확인하는 방식이 잘 맞아요."
+            )
 
         return user_trait, job_ai
 
     except Exception:
-        # JSON 파싱 실패 폴백
-        user_trait = "관심 분야와 전공 키워드가 비교적 뚜렷해서, 관련 직무를 폭넓게 탐색해보면 좋겠어요. 작은 프로젝트로 빠르게 경험을 쌓는 방식이 잘 맞아요."
+        user_trait = (
+            "관심 분야와 전공 키워드가 비교적 뚜렷해서, 관련 직무를 폭넓게 탐색해보면 좋겠어요. "
+            "작은 프로젝트로 빠르게 경험을 쌓는 방식이 잘 맞아요."
+        )
         for j in jobs:
             cd = j.get("jobCd", "")
             job_ai[cd] = {
@@ -350,7 +352,6 @@ with st.form("career_form"):
 # Result
 # =============================
 if submit:
-    # 필수 입력 검증
     missing = []
     if age_group == "선택":
         missing.append("연령")
@@ -367,10 +368,8 @@ if submit:
         st.error("사이드바에 고용24 authKey(API Key)를 입력해야 직업 정보를 불러올 수 있어요.")
         st.stop()
 
-    # 1) 관심분야/전공 기반 검색 키워드 만들기
     keywords = build_search_keywords(interest_field, major_text)
 
-    # 2) 여러 키워드로 검색해서 후보 풀 만들기
     with st.spinner("고용24에서 직업 정보를 검색하는 중..."):
         pool: List[Dict[str, str]] = []
         errors = []
@@ -389,20 +388,17 @@ if submit:
             st.caption(f"(참고) 마지막 오류: {errors[-1]}")
         st.stop()
 
-    # 중복 제거
     uniq = {}
     for j in pool:
         uniq[j["jobCd"]] = j
     pool = list(uniq.values())
 
-    # 3) 키워드 매칭으로 상위 3개 선정
     scored: List[Tuple[int, Dict[str, str], List[str]]] = []
     for j in pool:
         s, reasons = score_job(j, interest_field, major_text, mbti)
         scored.append((s, j, reasons))
     top3_scored = sorted(scored, key=lambda x: (x[0], x[1].get("jobNm", "")), reverse=True)[:3]
 
-    # 4) 각 직업 한 줄 설명(고용24 요약) 가져오기
     with st.spinner("추천 직업의 한 줄 설명을 불러오는 중..."):
         enriched = []
         for s, j, reasons in top3_scored:
@@ -415,7 +411,6 @@ if submit:
                 "fallback_reasons": reasons,
             })
 
-    # 5) OpenAI: 사용자 성향 + AI 직무 요약/추천 이유
     user_trait = ""
     job_ai_map: Dict[str, Dict[str, str]] = {}
 
@@ -449,7 +444,6 @@ if submit:
         st.markdown("#### 🧠 사용자 성향")
         st.write(user_trait)
 
-    # 카드 스타일
     st.markdown(
         """
         <style>
@@ -492,18 +486,16 @@ if submit:
         ai_summary = ai.get("ai_summary", "").strip()
         ai_reason = ai.get("ai_reason", "").strip()
 
-        # AI가 없으면 기존 키워드 매칭 이유를 2~3문장처럼 보이도록 약간 확장
         if not ai_reason:
             fallback = job.get("fallback_reasons", []) or []
-            # 2~3문장 형태로 합치기
             ai_reason = " ".join([re.sub(r"\*\*(.*?)\*\*", r"\1", r) for r in fallback])
-            ai_reason = ai_reason if ai_reason else "관심 분야와 입력한 키워드를 바탕으로 관련 직업군을 추천했어요. 실제 경험을 통해 적합도를 확인해보면 좋아요."
+            ai_reason = ai_reason if ai_reason else (
+                "관심 분야와 입력한 키워드를 바탕으로 관련 직업군을 추천했어요. "
+                "실제 경험을 통해 적합도를 확인해보면 좋아요."
+            )
 
         if not ai_summary:
-            # 고용24 한 줄 설명이 있으면 그걸 AI 요약으로 대체(없으면 기본 문장)
-            ai_summary = job.get("one_liner", "")
-            if not ai_summary:
-                ai_summary = "이 직무는 관심 분야와 전공 힌트를 바탕으로 탐색하기 좋은 선택지예요."
+            ai_summary = job.get("one_liner", "") or "이 직무는 관심 분야와 전공 힌트를 바탕으로 탐색하기 좋은 선택지예요."
 
         st.markdown(
             f"""
