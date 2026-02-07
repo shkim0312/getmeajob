@@ -14,7 +14,7 @@ st.set_page_config(page_title="대학생 진로 추천", page_icon="🧭", layou
 st.sidebar.header("🔑 OpenAI 설정")
 openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password", placeholder="sk-...")
 
-# (선택) 모델은 기본값 제공 (권한/계정에 따라 다를 수 있어 변경 가능하게)
+# (선택) 모델명
 model_name = st.sidebar.text_input("모델명(선택)", value="gpt-5.2")
 
 st.title("🧭 대학생 진로 추천 웹사이트")
@@ -164,7 +164,7 @@ JOBS: List[Job] = [
 ]
 
 # =============================
-# Matching helpers
+# Scoring (키워드 매칭)
 # =============================
 def tokenize(text: str) -> List[str]:
     if not text:
@@ -173,15 +173,11 @@ def tokenize(text: str) -> List[str]:
 
 def score_job(job: Job, interest_field: str, mbti: Optional[str], major_text: str) -> int:
     score = 0
-
-    # 관심분야 (핵심)
     score += 60 if interest_field in job.fields else 5
 
-    # MBTI 힌트
     if mbti and mbti in job.mbti_hints:
         score += 18
 
-    # 전공/키워드 텍스트 매칭
     tokens = tokenize(major_text)
     if tokens:
         hits = 0
@@ -189,8 +185,8 @@ def score_job(job: Job, interest_field: str, mbti: Optional[str], major_text: st
             h = hint.lower()
             if any(h in t or t in h for t in tokens):
                 hits += 1
-        if hits > 0:
-            score += 24 + min(hits, 3)  # 약간 보너스
+        if hits:
+            score += 24 + min(hits, 3)
 
     return score
 
@@ -205,7 +201,7 @@ def generate_ai_interpretation(
 ) -> Tuple[str, Dict[str, str]]:
     """
     반환:
-    - profile_summary: 사용자 패턴 해석(짧은 문단)
+    - profile_summary: 사용자 패턴 해석(2~4문장)
     - job_reasons: {직업명: "2문장"}
     """
     client = OpenAI(api_key=api_key)
@@ -235,7 +231,8 @@ def generate_ai_interpretation(
   "profile_summary": "사용자 패턴 해석 (한국어, 2~4문장)",
   "job_reasons": [
     {{"job_name": "직업명", "reason": "추천 이유 2문장(한국어)."}},
-    ...
+    {{"job_name": "직업명", "reason": "추천 이유 2문장(한국어)."}},
+    {{"job_name": "직업명", "reason": "추천 이유 2문장(한국어)."}}
   ]
 }}
 
@@ -263,21 +260,27 @@ def generate_ai_interpretation(
             if name:
                 job_reason_map[name] = reason
 
-        # 누락 대비(혹시 파싱은 됐는데 일부가 비면)
         for j in top_jobs:
-            job_reason_map.setdefault(j.name, "입력한 관심과 역량 방향이 이 직무와 잘 맞아요. 지금 단계에서 경험을 쌓아보기 좋은 선택지예요.")
+            job_reason_map.setdefault(
+                j.name,
+                "입력한 관심과 역량 방향이 이 직무와 잘 맞아요. 지금 단계에서 경험을 쌓아보기 좋은 선택지예요."
+            )
 
         if not profile_summary:
-            profile_summary = "입력한 관심 분야와 선택 정보(성격·전공)를 종합하면, 관련 분야에서 강점을 발휘할 가능성이 보여요. 특히 흥미가 오래 지속되는 영역을 중심으로 탐색하는 것이 좋아요."
+            profile_summary = (
+                "입력한 관심 분야와 선택 정보(성격·전공)를 종합하면, 관련 분야에서 강점을 발휘할 가능성이 보여요. "
+                "특히 흥미가 오래 지속되는 영역을 중심으로 탐색하는 것이 좋아요."
+            )
 
         return profile_summary, job_reason_map
 
     except Exception:
-        # JSON이 아닐 때 안전한 폴백
-        fallback_summary = "입력한 관심 분야와 선택 정보(성격·전공)를 종합해 보면, 관련 분야에서 몰입할 수 있는 방향이 보여요. 아래 직업들은 그 방향성과 잘 맞는 대표 선택지예요."
+        fallback_summary = (
+            "입력한 관심 분야와 선택 정보(성격·전공)를 종합해 보면, 관련 분야에서 몰입할 수 있는 방향이 보여요. "
+            "아래 직업들은 그 방향성과 잘 맞는 대표 선택지예요."
+        )
         fallback_map = {j.name: "관심 분야와 직무 성격이 잘 맞아요. 관련 경험을 작게라도 시작해보면 적성 확인에 도움이 돼요." for j in top_jobs}
         return fallback_summary, fallback_map
-
 
 # =============================
 # Form UI
@@ -328,15 +331,11 @@ if submit:
         st.error(f"필수 항목을 제출해야 해요: {', '.join(missing)}")
         st.stop()
 
-    # 추천 점수 계산
-    scored: List[Tuple[Job, int]] = []
-    for job in JOBS:
-        scored.append((job, score_job(job, interest_field, mbti, major_text)))
-
-    # 상위 3개
+    # Top 3 추천
+    scored: List[Tuple[Job, int]] = [(job, score_job(job, interest_field, mbti, major_text)) for job in JOBS]
     top3 = [j for (j, _) in sorted(scored, key=lambda x: (x[1], x[0].name), reverse=True)[:3]]
 
-    # OpenAI 해석 (키 없으면 안내만)
+    # OpenAI 해석
     profile_summary = ""
     ai_reason_map: Dict[str, str] = {}
 
@@ -418,7 +417,11 @@ if submit:
         if ai_reason:
             reason_html = f"• {ai_reason}"
         else:
-            reason_html = "• 관심 분야와 직무 특성이 잘 맞고, 현재 단계에서 탐색/준비를 시작하기 좋은 선택지예요. • 관련 프로젝트·인턴·동아리로 작은 경험을 쌓아 적합도를 확인해보세요."
+            # 폴백도 2문장으로 유지
+            reason_html = (
+                "• 관심 분야와 직무 성격이 잘 맞고, 현재 단계에서 탐색/준비를 시작하기 좋은 선택지예요. "
+                "• 관련 프로젝트·인턴·동아리로 작은 경험을 쌓아 적합도를 확인해보세요."
+            )
 
         st.markdown(
             f"""
@@ -426,7 +429,7 @@ if submit:
                 <div class="meta">{' '.join(pills)}</div>
                 <h3>{job.name}</h3>
                 <div>{job.one_liner}</div>
-                <p class="reason"><b>왜 추천했나요? (AI, 2문장)</b><br/>{reason_html}</p>
+                <p class="reason"><b>왜 추천했나요?</b><br/>{reason_html}</p>
             </div>
             """,
             unsafe_allow_html=True,
