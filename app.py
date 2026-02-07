@@ -156,42 +156,27 @@ JOBS: List[Job] = [
 ]
 
 # =============================
-# Matching helpers
+# Matching
 # =============================
-MBTI_LIST = [
-    "INTJ","INTP","ENTJ","ENTP",
-    "INFJ","INFP","ENFJ","ENFP",
-    "ISTJ","ISFJ","ESTJ","ESFJ",
-    "ISTP","ISFP","ESTP","ESFP",
-]
-
 def tokenize(text: str) -> List[str]:
     if not text:
         return []
     return re.findall(r"[A-Za-z가-힣0-9]+", text.lower())
 
-def score_job(
-    job: Job,
-    interest_field: str,
-    mbti: Optional[str],
-    major_text: str,
-) -> Tuple[int, List[str]]:
+def score_job(job: Job, interest_field: str, mbti: Optional[str], major_text: str) -> Tuple[int, List[str]]:
     score = 0
     reasons: List[str] = []
 
-    # 1) 관심분야 일치 (가장 큰 가중치)
     if interest_field in job.fields:
         score += 60
         reasons.append(f"관심분야가 **{interest_field}**이고, 이 직업이 해당 분야와 직접적으로 연결돼요.")
     else:
-        score += 5  # 완전 배제하지 않기 위한 기본점
+        score += 5
 
-    # 2) MBTI 힌트
     if mbti and mbti in job.mbti_hints:
         score += 18
         reasons.append(f"선택한 MBTI(**{mbti}**) 성향이 이 직업의 업무 스타일과 잘 맞는 편이에요.")
 
-    # 3) 전공(텍스트) 매칭: 힌트 단어/키워드가 포함되면 가점
     tokens = tokenize(major_text)
     if tokens:
         hits = []
@@ -203,37 +188,31 @@ def score_job(
             score += 24
             reasons.append(f"입력한 전공/키워드가 관련 분야({', '.join(hits[:3])})와 맞닿아 있어요.")
 
-    # 이유 2~3개로 제한
     if len(reasons) > 3:
         reasons = reasons[:3]
 
     return score, reasons
 
 # =============================
-# UI: Form
+# Form UI
 # =============================
+MBTI_LIST = [
+    "INTJ","INTP","ENTJ","ENTP",
+    "INFJ","INFP","ENFJ","ENFP",
+    "ISTJ","ISFJ","ESTJ","ESFJ",
+    "ISTP","ISFP","ESTP","ESFP",
+]
+
 with st.form("career_form"):
     st.subheader("필수 정보")
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        age_group = st.selectbox(
-            "연령",
-            ["선택", "18-19", "20-22", "23-25", "26-29", "30+"],
-            index=0,
-        )
+        age_group = st.selectbox("연령", ["선택", "18-19", "20-22", "23-25", "26-29", "30+"], index=0)
     with c2:
-        education = st.selectbox(
-            "학력",
-            ["선택", "고졸", "대학교 재학", "대졸", "대학원 졸업"],
-            index=0,
-        )
+        education = st.selectbox("학력", ["선택", "고졸", "대학교 재학", "대졸", "대학원 졸업"], index=0)
     with c3:
-        interest_field = st.selectbox(
-            "관심분야",
-            ["선택", "인문", "사회", "교육", "공학", "자연", "의학", "예체능"],
-            index=0,
-        )
+        interest_field = st.selectbox("관심분야", ["선택", "인문", "사회", "교육", "공학", "자연", "의학", "예체능"], index=0)
 
     st.divider()
     st.subheader("선택 정보")
@@ -263,19 +242,16 @@ if submit:
         st.error(f"필수 항목을 제출해야 해요: {', '.join(missing)}")
         st.stop()
 
-    # 점수 계산
     scored: List[Tuple[Job, int, List[str]]] = []
     for job in JOBS:
         s, reasons = score_job(job, interest_field, mbti, major_text)
         scored.append((job, s, reasons))
 
-    # 상위 3개 선택 (동점 안정화: 이름순)
     top3 = sorted(scored, key=lambda x: (x[1], x[0].name), reverse=True)[:3]
 
     st.divider()
     st.subheader("✨ 추천 결과")
 
-    # 카드 스타일
     st.markdown(
         """
         <style>
@@ -331,17 +307,6 @@ if submit:
             </div>
             """,
             unsafe_allow_html=True,
-        )
-
-    with st.expander("내 입력 요약"):
-        st.write(
-            {
-                "연령": age_group,
-                "학력": education,
-                "관심분야": interest_field,
-                "MBTI": mbti or "선택 안 함",
-                "전공": major_text or "(미입력)",
-            }
         )
 
 st.caption("※ 본 추천은 키워드 매칭 기반 데모이며, 실제 진로 선택은 추가 탐색/상담을 권장해요.")
