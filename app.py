@@ -10,7 +10,8 @@ from openai import OpenAI
 # =============================
 # Page
 # =============================
-st.set_page_config(page_title="대학생 진로 추천", page_icon="🧭", layout="wide")
+APP_NAME = "대동여진로"
+st.set_page_config(page_title=APP_NAME, page_icon="🧭", layout="wide")
 
 # =============================
 # Work24(고용24) API
@@ -35,7 +36,7 @@ openai_model = st.sidebar.text_input("모델명(선택)", value="gpt-5.2")
 # =============================
 # UI Header
 # =============================
-st.title("🧭 대학생 진로 추천 웹사이트")
+st.title(f"🧭 {APP_NAME}")
 st.write(
     "필수 정보(연령·학력·관심분야)와 선택 정보(성격·전공)를 입력하면, "
     "**키워드 매칭**으로 어울리는 **직업 3개**를 추천해드려요. (데이터: 고용24 직업정보 API)"
@@ -475,7 +476,7 @@ if submit:
         st.markdown("#### 🧠 사용자 성향")
         st.write(user_trait)
 
-    # ✅ 가로(3열)로 카드 배치
+    # ✅ 가로(3열) 카드 배치
     cols = st.columns(3, gap="large")
 
     for idx, job in enumerate(enriched, start=1):
