@@ -1,13 +1,11 @@
 import json
 import re
-import time
 import requests
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 
 import streamlit as st
 from openai import OpenAI
-from requests.exceptions import ConnectTimeout, ReadTimeout, Timeout, RequestException
 
 # =============================
 # Page
@@ -129,36 +127,8 @@ def parse_job_detail_summary(xml_text: str) -> Dict[str, str]:
         "jobEnv": safe_text(job_sum, "jobEnv"),
     }
 
-def is_slow_server_error(err: Exception) -> bool:
-    # 연결/읽기 타임아웃을 "서버가 느린 상태"로 안내
-    return isinstance(err, (ConnectTimeout, ReadTimeout, Timeout))
-
-def request_with_retry(url: str, params: dict, timeout_sec: int = 12, retries: int = 2) -> requests.Response:
-    """
-    간단 재시도(지수 백오프) 포함.
-    실패 시 마지막 예외를 raise.
-    """
-    last_err = None
-    for i in range(retries + 1):
-        try:
-            return requests.get(url, params=params, timeout=timeout_sec)
-        except Exception as e:
-            last_err = e
-            # 마지막 시도면 종료
-            if i == retries:
-                raise
-            # 백오프 (0.8s, 1.6s, ...)
-            time.sleep(0.8 * (2 ** i))
-    raise last_err  # type: ignore
-
 @st.cache_data(ttl=600)
-def work24_search(auth_key: str, keyword: str) -> Tuple[List[Dict[str, str]], Optional[str], bool]:
-    """
-    반환:
-    - jobs
-    - err_msg(있으면)
-    - slow_server(True면 '지금 서버가 느린 상태' 안내 대상)
-    """
+def work24_search(auth_key: str, keyword: str) -> Tuple[List[Dict[str, str]], Optional[str]]:
     params = {
         "authKey": auth_key,
         **LIST_FIXED_PARAMS,
@@ -166,14 +136,14 @@ def work24_search(auth_key: str, keyword: str) -> Tuple[List[Dict[str, str]], Op
         "keyword": keyword,
     }
     try:
-        r = request_with_retry(WORK24_LIST_URL, params=params, timeout_sec=12, retries=2)
+        r = requests.get(WORK24_LIST_URL, params=params, timeout=12)
         r.raise_for_status()
-        return parse_job_list(r.text), None, False
+        return parse_job_list(r.text), None
     except Exception as e:
-        return [], str(e), is_slow_server_error(e)
+        return [], str(e)
 
 @st.cache_data(ttl=600)
-def work24_detail(auth_key: str, job_cd: str, dtl_gb: str = "1") -> Tuple[Dict[str, str], Optional[str], bool]:
+def work24_detail(auth_key: str, job_cd: str, dtl_gb: str = "1") -> Tuple[Dict[str, str], Optional[str]]:
     params = {
         "authKey": auth_key,
         **DETAIL_FIXED_PARAMS,
@@ -181,11 +151,11 @@ def work24_detail(auth_key: str, job_cd: str, dtl_gb: str = "1") -> Tuple[Dict[s
         "dtlGb": dtl_gb,
     }
     try:
-        r = request_with_retry(WORK24_DETAIL_URL, params=params, timeout_sec=12, retries=2)
+        r = requests.get(WORK24_DETAIL_URL, params=params, timeout=12)
         r.raise_for_status()
-        return parse_job_detail_summary(r.text), None, False
+        return parse_job_detail_summary(r.text), None
     except Exception as e:
-        return {}, str(e), is_slow_server_error(e)
+        return {}, str(e)
 
 def score_job(job: Dict[str, str], interest_field: str, major_text: str, mbti: Optional[str]) -> Tuple[int, List[str]]:
     job_nm = (job.get("jobNm") or "").lower()
@@ -395,11 +365,11 @@ with st.form("career_form"):
     st.subheader("필수 정보")
     c1, c2, c3 = st.columns(3)
     with c1:
-        age_group = st.selectbox("연령", ["선택", "18-19", "20-22", "23-25", "26-29", "30+"], index=0)
+        age_group = st.selectbox("연령", AGE_OPTIONS, index=0)
     with c2:
-        education = st.selectbox("학력", ["선택", "고졸", "대학교 재학", "대졸"], index=0)
+        education = st.selectbox("학력", EDU_OPTIONS, index=0)
     with c3:
-        interest_field = st.selectbox("관심분야", ["선택", "인문", "사회", "교육", "공학", "자연", "의학", "예체능"], index=0)
+        interest_field = st.selectbox("관심분야", FIELD_OPTIONS, index=0)
 
     st.divider()
     st.subheader("선택 정보")
@@ -434,25 +404,17 @@ if submit:
 
     keywords = build_search_keywords(interest_field, major_text)
 
-    slow_server_flag = False
-
     with st.spinner("고용24에서 직업 정보를 검색하는 중..."):
         pool: List[Dict[str, str]] = []
         errors = []
         for kw in keywords:
-            jobs, err, slow = work24_search(work24_key.strip(), kw)
-            if slow:
-                slow_server_flag = True
+            jobs, err = work24_search(work24_key.strip(), kw)
             if err:
                 errors.append(err)
                 continue
             pool.extend(jobs)
             if len(pool) >= 40:
                 break
-
-    # ✅ 안내 메시지: 서버가 느린 상태(타임아웃 계열 발생 시)
-    if slow_server_flag:
-        st.info("지금 서버가 느린 상태예요. 응답이 늦거나 조회가 실패할 수 있어요. 잠시 후 다시 시도해보세요.")
 
     if not pool:
         st.warning("직업 검색 결과가 없어요. 전공을 더 일반적인 단어로 바꿔보거나 전공을 비워두고 다시 시도해보세요.")
@@ -472,9 +434,7 @@ if submit:
     with st.spinner("추천 직업의 한 줄 설명을 불러오는 중..."):
         enriched: List[Dict[str, str]] = []
         for s, j, reasons in top3_scored:
-            detail, err, slow = work24_detail(work24_key.strip(), j["jobCd"], dtl_gb="1")
-            if slow:
-                slow_server_flag = True
+            detail, _ = work24_detail(work24_key.strip(), j["jobCd"], dtl_gb="1")
             one_liner_raw = (detail.get("jobSum") or "").strip()
             one_liner = shorten(one_liner_raw, 140) if one_liner_raw else ""
             enriched.append({
@@ -482,10 +442,6 @@ if submit:
                 "one_liner": one_liner or "직무 요약 정보를 불러오지 못했어요. (고용24 응답에 요약이 없을 수 있어요.)",
                 "fallback_reasons": reasons,
             })
-
-    # 상세 단계에서 느림 감지되면 한 번 더 안내
-    if slow_server_flag:
-        st.info("지금 서버가 느린 상태예요. 일부 직업 설명이 비어 보일 수 있어요. 잠시 후 다시 시도해보세요.")
 
     user_trait = ""
     job_ai_map: Dict[str, Dict[str, str]] = {}
@@ -520,6 +476,7 @@ if submit:
         st.markdown("#### 🧠 사용자 성향")
         st.write(user_trait)
 
+    # ✅ 가로(3열) 카드 배치
     cols = st.columns(3, gap="large")
 
     for idx, job in enumerate(enriched, start=1):
